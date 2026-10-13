@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+.venv/
+.tmp-certprobe/
+**/bin/
+**/obj/
+.vs/
+*.pfx
+*.p12
+*.key
