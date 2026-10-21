@@ -1,0 +1,73 @@
+trigger: none
+pr: none
+
+variables:
+  - group: kuka-middleware-deploy
+
+pool:
+  name: $(DOCKER_AGENT_POOL)
+
+steps:
+  - checkout: self
+
+  - task: PowerShell@2
+    displayName: Deploy with Docker Compose and smoke-test
+    inputs:
+      targetType: inline
+      script: |
+        $required = @(
+          'POSTGRES_USER',
+          'POSTGRES_PASSWORD',
+          'POSTGRES_DB',
+          'POSTGRES_PORT',
+          'MIDDLEWARE_API_KEY',
+          'KUKA_FM_BASE_URL',
+          'KUKA_FM_ORG_ID',
+          'KUKA_FM_TOKEN',
+          'KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE',
+          'KUKA_FM_POLL_INTERVAL_SECONDS',
+          'SEQ_ADMIN_PASSWORD'
+        )
+        foreach ($name in $required) {
+          if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            throw "Required deployment variable '$name' is not configured."
+          }
+        }
+
+        docker compose -f docker-compose.yml up -d --build
+        if ($LASTEXITCODE -ne 0) {
+          throw 'Docker Compose deployment failed.'
+        }
+
+        $ready = $false
+        for ($attempt = 1; $attempt -le 18; $attempt++) {
+          try {
+            $ui = Invoke-WebRequest -Uri 'http://localhost:8080/' -TimeoutSec 5
+            $health = Invoke-WebRequest -Uri 'http://localhost:8080/api/health' -TimeoutSec 5
+            if ($ui.StatusCode -eq 200 -and $health.StatusCode -eq 200) {
+              $ready = $true
+              break
+            }
+          }
+          catch {
+            Start-Sleep -Seconds 5
+          }
+        }
+
+        if (-not $ready) {
+          throw 'Post-deployment smoke check failed for the UI or API health endpoint.'
+        }
+        Write-Host 'Deployment and smoke checks completed successfully.'
+    env:
+      POSTGRES_USER: $(POSTGRES_USER)
+      POSTGRES_PASSWORD: $(POSTGRES_PASSWORD)
+      POSTGRES_DB: $(POSTGRES_DB)
+      POSTGRES_PORT: $(POSTGRES_PORT)
+      MIDDLEWARE_API_KEY: $(MIDDLEWARE_API_KEY)
+      KUKA_FM_BASE_URL: $(KUKA_FM_BASE_URL)
+      KUKA_FM_ORG_ID: $(KUKA_FM_ORG_ID)
+      KUKA_FM_TOKEN: $(KUKA_FM_TOKEN)
+      KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE: $(KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE)
+      KUKA_FM_POLL_INTERVAL_SECONDS: $(KUKA_FM_POLL_INTERVAL_SECONDS)
+      SEQ_FIRSTRUN_NOAUTHENTICATION: 'false'
+      SEQ_ADMIN_PASSWORD: $(SEQ_ADMIN_PASSWORD)

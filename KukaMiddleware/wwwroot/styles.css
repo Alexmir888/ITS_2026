@@ -146,12 +146,37 @@ button.danger {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   margin-bottom: 16px;
 }
 
 .panel-header h2 {
   margin: 0;
   font-size: 1.2rem;
+}
+
+.panel-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.inline-control {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.inline-control select {
+  width: auto;
+}
+
+.inline-control input[type="checkbox"] {
+  width: auto;
+  margin: 0;
 }
 
 .dispatch-panel {
@@ -214,6 +239,35 @@ th, td {
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
+}
+
+td.row-actions {
+  display: flex;
+  gap: 8px;
+  min-width: 190px;
+}
+
+.row-actions button,
+td button {
+  white-space: nowrap;
+}
+
+.history-row td {
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.history-table {
+  min-width: 520px;
+}
+
+.history-table th,
+.history-table td {
+  padding: 8px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 th {
@@ -316,5 +370,14 @@ th {
   .topbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .panel-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .panel-controls {
+    justify-content: flex-start;
   }
 }

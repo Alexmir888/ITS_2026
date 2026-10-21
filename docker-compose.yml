@@ -1,9 +1,10 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-middleware}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:-kuka_middleware}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
@@ -15,21 +16,40 @@ services:
       timeout: 3s
       retries: 10
 
+  seq:
+    image: datalust/seq:2026.1.17182
+    restart: unless-stopped
+    environment:
+      ACCEPT_EULA: "Y"
+      SEQ_FIRSTRUN_NOAUTHENTICATION: ${SEQ_FIRSTRUN_NOAUTHENTICATION:-true}
+      SEQ_FIRSTRUN_ADMINPASSWORD: ${SEQ_ADMIN_PASSWORD:-}
+    ports:
+      - "127.0.0.1:5341:80"
+    volumes:
+      - seq_data:/data
+
   middleware-api:
     build: .
+    restart: unless-stopped
     ports:
       - "8080:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__DefaultConnection: Host=db;Port=5432;Database=${POSTGRES_DB:-kuka_middleware};Username=${POSTGRES_USER:-middleware};Password=${POSTGRES_PASSWORD:-local-dev-password}
-      Authentication__ApiKey: ${MIDDLEWARE_API_KEY:-replace-this-local-key}
+      Authentication__ApiKey: ${MIDDLEWARE_API_KEY:?MIDDLEWARE_API_KEY is required}
       KukaFm__BaseUrl: ${KUKA_FM_BASE_URL:-https://kukafm.its.fei}
-      KukaFm__AuthorizationToken: ${KUKA_FM_TOKEN:-}
+      KukaFm__OrgId: ${KUKA_FM_ORG_ID:-UNIVERSAL}
+      KukaFm__AuthorizationToken: ${KUKA_FM_TOKEN:?KUKA_FM_TOKEN is required}
       KukaFm__AllowUntrustedCertificate: ${KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE:-false}
       KukaFm__PollIntervalSeconds: ${KUKA_FM_POLL_INTERVAL_SECONDS:-10}
+      Seq__ServerUrl: http://seq:5341
+      Seq__ApiKey: ${SEQ_API_KEY:-}
     depends_on:
       db:
         condition: service_healthy
+      seq:
+        condition: service_started
 
 volumes:
   postgres_data:
+  seq_data:

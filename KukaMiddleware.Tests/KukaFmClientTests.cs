@@ -18,23 +18,36 @@ public sealed class KukaFmClientTests
             """);
         using var httpClient = CreateHttpClient(handler);
         var client = CreateClient(httpClient);
-        using var missionData = JsonDocument.Parse("[{\"sequence\":1,\"position\":\"A-02\",\"type\":\"NODE_POINT\"}]");
 
         await client.DispatchMissionAsync(new KukaSubmitMissionRequest(
-            "UNIVERSAL", "request-1", "mission-1", "MOVE", ["R-01"], null, 1,
-            null, null, missionData.RootElement), CancellationToken.None);
+            "UNIVERSAL",
+            "request-1",
+            "mission-1",
+            "RACK_MOVE",
+            ["R-01"],
+            50,
+            "BIN-01",
+            [
+                new KukaMissionDataPoint(1, "A-01", "NODE_POINT", "UP_CONTAINER"),
+                new KukaMissionDataPoint(2, "A-02", "NODE_POINT", "DOWN_CONTAINER")
+            ]), CancellationToken.None);
 
         Assert.Equal(HttpMethod.Post, handler.Method);
         Assert.Equal("/interfaces/api/amr/submitMission", handler.Path);
         Assert.Equal("access-token", handler.Authorization);
         using var json = JsonDocument.Parse(handler.Body!);
-        Assert.Equal("UNIVERSAL", json.RootElement.GetProperty("orgId").GetString());
-        Assert.Equal("mission-1", json.RootElement.GetProperty("missionCode").GetString());
-        Assert.False(json.RootElement.TryGetProperty("robotType", out _));
+        Assert.Equal("RACK_MOVE", json.RootElement.GetProperty("missionType").GetString());
+        Assert.Equal("BIN-01", json.RootElement.GetProperty("containerCode").GetString());
+        Assert.Equal(50, json.RootElement.GetProperty("priority").GetInt32());
+        var steps = json.RootElement.GetProperty("missionData");
+        Assert.Equal("A-01", steps[0].GetProperty("position").GetString());
+        Assert.Equal("UP_CONTAINER", steps[0].GetProperty("actionType").GetString());
+        Assert.Equal("A-02", steps[1].GetProperty("position").GetString());
+        Assert.Equal("DOWN_CONTAINER", steps[1].GetProperty("actionType").GetString());
     }
 
     [Fact]
-    public async Task JobQueryPostsAndReadsKukaDataEnvelopeAndNumericStatus()
+    public async Task JobQueryPostsAndReadsDataEnvelopeAndNumericStatus()
     {
         var handler = new RecordingHandler("""
             {"data":[{"jobCode":"mission-1","robotId":"R-01","status":20}],"code":"0","message":null,"success":true}
@@ -45,7 +58,56 @@ public sealed class KukaFmClientTests
         Assert.Equal(HttpMethod.Post, handler.Method);
         Assert.Equal("/interfaces/api/amr/jobQuery", handler.Path);
         Assert.Equal("mission-1", Assert.Single(jobs).MissionCode);
-        Assert.Equal(20, jobs[0].Status);
+        Assert.Equal((short)20, jobs[0].Status);
+    }
+
+    [Fact]
+    public async Task SpecificJobQueryReadsJobFromDataArray()
+    {
+        var handler = new RecordingHandler("""
+            {"data":[{"jobCode":"mission-1","robotId":"R-01","status":31}],"code":"0","message":null,"success":true}
+            """);
+        using var httpClient = CreateHttpClient(handler);
+        var job = await CreateClient(httpClient).QueryJobAsync("mission-1", CancellationToken.None);
+
+        Assert.Equal("/interfaces/api/amr/jobQuery", handler.Path);
+        Assert.Equal("mission-1", Assert.IsType<KukaJobResponse>(job).MissionCode);
+        using var body = JsonDocument.Parse(handler.Body!);
+        Assert.Equal("mission-1", body.RootElement.GetProperty("jobCode").GetString());
+    }
+
+    [Fact]
+    public async Task CancelUsesMissionCancelEndpointAndForceMode()
+    {
+        var handler = new RecordingHandler("""
+            {"data":null,"code":"0","message":null,"success":true}
+            """);
+        using var httpClient = CreateHttpClient(handler);
+
+        await CreateClient(httpClient).CancelMissionAsync(
+            new KukaCancelMissionRequest("request-1", "mission-1", "FORCE"),
+            CancellationToken.None);
+
+        Assert.Equal("/interfaces/api/amr/missionCancel", handler.Path);
+        Assert.Equal("access-token", handler.Authorization);
+        using var body = JsonDocument.Parse(handler.Body!);
+        Assert.Equal("mission-1", body.RootElement.GetProperty("missionCode").GetString());
+        Assert.Equal("FORCE", body.RootElement.GetProperty("cancelMode").GetString());
+    }
+
+    [Fact]
+    public async Task RobotQueryReadsRobotDetails()
+    {
+        var handler = new RecordingHandler("""
+            {"data":[{"robotId":"R-01","robotType":"LIFT","status":3,"batteryLevel":87.5,"mapCode":"M1","nodeCode":"A-01","missionCode":null}],"code":"0","message":null,"success":true}
+            """);
+        using var httpClient = CreateHttpClient(handler);
+        var robots = await CreateClient(httpClient).QueryRobotsAsync(CancellationToken.None);
+        var robot = Assert.Single(robots);
+
+        Assert.Equal("R-01", robot.RobotId);
+        Assert.Equal((short)3, robot.Status);
+        Assert.Equal(87.5m, robot.BatteryLevel);
     }
 
     private static HttpClient CreateHttpClient(RecordingHandler handler) =>

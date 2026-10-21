@@ -1,0 +1,52 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+steps:
+  - checkout: self
+
+  - task: UseDotNet@2
+    displayName: Install .NET 8 SDK
+    inputs:
+      packageType: sdk
+      version: 8.0.x
+
+  - script: dotnet restore KukaMiddleware.Tests/KukaMiddleware.Tests.csproj
+    displayName: Restore dependencies
+
+  - script: |
+      set -euo pipefail
+      for project in KukaMiddleware/KukaMiddleware.csproj KukaMiddleware.Tests/KukaMiddleware.Tests.csproj; do
+        result="$(dotnet list "$project" package --vulnerable --include-transitive 2>&1)"
+        printf '%s\n' "$result"
+        if printf '%s\n' "$result" | grep -Eiq '(^|[[:space:]])(High|Critical)([[:space:]]|$)'; then
+          echo "High or critical NuGet vulnerabilities were found."
+          exit 1
+        fi
+      done
+    displayName: Fail on high or critical NuGet vulnerabilities
+
+  - script: dotnet format KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --verify-no-changes --no-restore
+    displayName: Verify C# formatting and analyzers
+
+  - script: dotnet build KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --configuration Release --no-restore --warnaserror
+    displayName: Build with warnings as errors
+
+  - script: dotnet test KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=middleware-tests.trx" --results-directory "$(Agent.TempDirectory)/test-results"
+    displayName: Run unit and API tests
+
+  - task: PublishTestResults@2
+    displayName: Publish test results
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: VSTest
+      testResultsFiles: '$(Agent.TempDirectory)/test-results/*.trx'
+      failTaskOnFailedTests: true
+      testRunTitle: KUKA Middleware tests
+
+  - script: docker build --tag kuka-middleware:$(Build.SourceVersion) .
+    displayName: Build production container

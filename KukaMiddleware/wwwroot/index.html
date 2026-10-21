@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>KUKA Fleet Manager</title>
+    <title>KUKA Fleet Middleware</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -11,59 +11,88 @@
       <header class="topbar">
         <div>
           <p class="eyebrow">Fleet control</p>
-          <h1>KUKA Fleet Manager</h1>
+          <h1>KUKA Fleet Middleware</h1>
         </div>
         <div class="api-key-box">
-          <label for="apiKeyInput">Ключ доступа</label>
+          <label for="apiKeyInput">Middleware API key</label>
           <div class="api-key-row">
             <input id="apiKeyInput" type="password" placeholder="MIDDLEWARE_API_KEY" autocomplete="current-password" />
-            <button id="saveApiKeyBtn" type="button">Подключить</button>
+            <button id="saveApiKeyBtn" type="button">Connect</button>
           </div>
-          <span id="connectionStatus" class="connection-status" role="status">Нет соединения</span>
+          <span id="connectionStatus" class="connection-status" role="status">Not connected</span>
         </div>
       </header>
 
       <main class="dashboard">
         <section class="panel dispatch-panel">
           <div class="panel-header">
-            <h2>Новая миссия</h2>
+            <h2>Dispatch RACK_MOVE</h2>
           </div>
           <form id="dispatchForm" class="stack-form">
             <label for="robotId">
-              Робот
+              Available robot
               <select id="robotId" name="robotId" required disabled>
-                <option value="">Сначала подключитесь</option>
+                <option value="">Connect to load robots</option>
               </select>
             </label>
-
-            <label for="targetPoint">ID узла назначения</label>
-            <input id="targetPoint" name="targetPoint" value="Labak-CHTN-22" list="knownNodes" required />
-            <datalist id="knownNodes">
-              <option value="Labak-CHTN-22" label="Узел 22"></option>
-            </datalist>
-            <p class="field-note">Узел 22 на карте · Labak-CHTN-22</p>
-
+            <div class="field-grid">
+              <label for="startNode">
+                Start node
+                <input id="startNode" name="startNode" maxlength="64" required />
+              </label>
+              <label for="targetNode">
+                Target node
+                <input id="targetNode" name="targetNode" maxlength="64" required />
+              </label>
+            </div>
+            <div class="field-grid">
+              <label for="containerCode">
+                Container code
+                <input id="containerCode" name="containerCode" maxlength="64" required />
+              </label>
+              <label for="priority">
+                Priority (1–99)
+                <input id="priority" name="priority" type="number" min="1" max="99" value="50" required />
+              </label>
+            </div>
             <div class="actions">
-              <button id="dispatchButton" type="submit" class="primary" disabled>Отправить</button>
+              <button id="dispatchButton" type="submit" class="primary" disabled>Dispatch mission</button>
             </div>
             <p id="dispatchStatus" class="dispatch-status" role="status" aria-live="polite"></p>
           </form>
         </section>
 
-        <section class="panel">
+        <section class="panel missions-panel">
           <div class="panel-header">
-            <h2>Миссии</h2>
-            <button id="refreshMissionsBtn" type="button" class="secondary" title="Обновить миссии">Обновить</button>
+            <h2>Missions</h2>
+            <div class="panel-controls">
+              <label class="inline-control" for="missionState">
+                Show
+                <select id="missionState">
+                  <option value="">All</option>
+                  <option value="active">Active</option>
+                  <option value="finished">Finished</option>
+                </select>
+              </label>
+              <label class="inline-control" for="autoRefresh">
+                <input id="autoRefresh" type="checkbox" checked />
+                Auto-refresh (1 s)
+              </label>
+              <button id="refreshMissionsBtn" type="button" class="secondary">Refresh</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Код миссии</th>
-                  <th>Робот</th>
-                  <th>Статус</th>
-                  <th>Создана</th>
-                  <th></th>
+                  <th>Mission</th>
+                  <th>Robot</th>
+                  <th>Route</th>
+                  <th>Container</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Created / completed</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody id="missionsTableBody"></tbody>
@@ -71,18 +100,23 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel robots-panel">
           <div class="panel-header">
-            <h2>Роботы</h2>
-            <button id="refreshRobotsBtn" type="button" class="secondary" title="Обновить состояние роботов">Обновить</button>
+            <h2>Robots</h2>
+            <button id="refreshRobotsBtn" type="button" class="secondary">Refresh</button>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>ID робота</th>
-                  <th>Состояние</th>
-                  <th>Обновлено</th>
+                  <th>Robot</th>
+                  <th>Availability</th>
+                  <th>KUKA state</th>
+                  <th>Battery</th>
+                  <th>Map / node</th>
+                  <th>Mission</th>
+                  <th>Updated</th>
+                  <th>History</th>
                 </tr>
               </thead>
               <tbody id="robotsTableBody"></tbody>
@@ -93,7 +127,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
     <script src="/app.js"></script>
   </body>
 </html>

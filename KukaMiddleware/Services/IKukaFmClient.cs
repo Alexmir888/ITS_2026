@@ -7,5 +7,6 @@ public interface IKukaFmClient
     Task DispatchMissionAsync(KukaSubmitMissionRequest request, CancellationToken cancellationToken);
     Task CancelMissionAsync(KukaCancelMissionRequest request, CancellationToken cancellationToken);
     Task<IReadOnlyList<KukaJobResponse>> QueryJobsAsync(CancellationToken cancellationToken);
+    Task<KukaJobResponse?> QueryJobAsync(string missionCode, CancellationToken cancellationToken);
     Task<IReadOnlyList<KukaRobotResponse>> QueryRobotsAsync(CancellationToken cancellationToken);
 }

@@ -34,83 +34,148 @@ public sealed class MissionPollingWorker(
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
 
-    private async Task PollOnceAsync(CancellationToken cancellationToken)
+    internal async Task PollOnceAsync(CancellationToken cancellationToken)
     {
         using var scope = scopeFactory.CreateScope();
         var kuka = scope.ServiceProvider.GetRequiredService<IKukaFmClient>();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+        var robots = await kuka.QueryRobotsAsync(cancellationToken);
         var jobs = await kuka.QueryJobsAsync(cancellationToken);
-        foreach (var job in jobs)
+        var activeMissions = await db.Missions
+            .Include(mission => mission.History)
+            .Where(mission => mission.StatusCode == 10
+                || mission.StatusCode == 20
+                || mission.StatusCode == 25
+                || mission.StatusCode == 28
+                || mission.StatusCode == 50)
+            .ToListAsync(cancellationToken);
+        var knownRobots = await db.Robots
+            .Include(robot => robot.History)
+            .ToDictionaryAsync(robot => robot.RobotId, StringComparer.Ordinal, cancellationToken);
+
+        var jobsByCode = jobs
+            .Where(job => !string.IsNullOrWhiteSpace(job.MissionCode))
+            .GroupBy(job => job.MissionCode, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
+        foreach (var mission in activeMissions)
         {
-            var mission = await db.Missions
-                .Include(item => item.History)
-                .SingleOrDefaultAsync(item => item.MissionCode == job.MissionCode, cancellationToken);
-            if (mission is null)
+            if (!jobsByCode.TryGetValue(mission.MissionCode, out var job))
             {
-                mission = new Mission
-                {
-                    MissionCode = job.MissionCode,
-                    RobotId = job.RobotId,
-                    Status = MapJobStatus(job.Status)
-                };
-                mission.History.Add(new StatusHistory { Status = mission.Status });
-                db.Missions.Add(mission);
+                job = await kuka.QueryJobAsync(mission.MissionCode, cancellationToken);
+            }
+
+            if (job is null)
+            {
                 continue;
             }
 
-            mission.RobotId = job.RobotId;
-            var jobStatus = MapJobStatus(job.Status);
-            if (!string.Equals(mission.Status, jobStatus, StringComparison.OrdinalIgnoreCase))
-            {
-                mission.Status = jobStatus;
-                mission.History.Add(new StatusHistory { Status = jobStatus });
-            }
+            ApplyJob(mission, job, DateTime.UtcNow);
         }
 
-        var robots = await kuka.QueryRobotsAsync(cancellationToken);
-        foreach (var item in robots)
+        foreach (var response in robots)
         {
-            var robot = await db.Robots.FindAsync([item.RobotId], cancellationToken);
-            if (robot is null)
+            if (!knownRobots.TryGetValue(response.RobotId, out var robot))
             {
-                db.Robots.Add(new Robot { RobotId = item.RobotId, Status = MapRobotStatus(item.Status) });
+                robot = CreateRobot(response, DateTime.UtcNow);
+                db.Robots.Add(robot);
+                knownRobots.Add(response.RobotId, robot);
+                continue;
             }
-            else
-            {
-                robot.Status = MapRobotStatus(item.Status);
-                robot.LastUpdated = DateTime.UtcNow;
-            }
+
+            ApplyRobot(robot, response, DateTime.UtcNow);
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        logger.LogInformation("KUKA FM polling completed: {MissionCount} jobs, {RobotCount} robots",
-            jobs.Count, robots.Count);
+        logger.LogInformation(
+            "KUKA FM polling completed: {MissionCount} tracked missions, {RobotCount} robots",
+            activeMissions.Count, robots.Count);
     }
 
-    private static string MapJobStatus(int status) => status switch
+    private static void ApplyJob(Mission mission, KukaJobResponse job, DateTime now)
     {
-        10 => "CREATED",
-        20 => "EXECUTING",
-        25 => "WAITING",
-        28 => "CANCELLING",
-        30 => "COMPLETED",
-        31 => "CANCELLED",
-        35 => "MANUAL_COMPLETED",
-        50 => "WARNING",
-        60 => "STARTUP_ERROR",
-        _ => $"UNKNOWN_{status}"
-    };
+        var changed = mission.StatusCode != job.Status
+            || !string.Equals(mission.RobotId, job.RobotId, StringComparison.Ordinal);
+        if (!changed)
+        {
+            return;
+        }
 
-    private static string MapRobotStatus(int status) => status switch
+        if (mission.StatusCode != job.Status)
+        {
+            var currentHistory = mission.History
+                .Where(history => history.ValidTo is null)
+                .OrderByDescending(history => history.ValidFrom)
+                .FirstOrDefault();
+            if (currentHistory is not null)
+            {
+                currentHistory.ValidTo = now;
+            }
+
+            mission.History.Add(new StatusHistory
+            {
+                StatusCode = job.Status,
+                StatusName = StatusMapping.MissionName(job.Status),
+                ValidFrom = now
+            });
+            mission.StatusCode = job.Status;
+            mission.StatusName = StatusMapping.MissionName(job.Status);
+            mission.CompletedAt = StatusMapping.IsFinishedMission(job.Status) ? now : null;
+        }
+
+        mission.RobotId = job.RobotId;
+        mission.UpdatedAt = now;
+    }
+
+    private static void ApplyRobot(Robot robot, KukaRobotResponse response, DateTime now)
     {
-        1 => "DEPARTURE",
-        2 => "OFFLINE",
-        3 => "AVAILABLE",
-        4 => "BUSY",
-        5 => "CHARGING",
-        6 => "UPDATING",
-        7 => "ABNORMAL",
-        _ => $"UNKNOWN_{status}"
+        if (robot.RobotType == response.RobotType
+            && robot.StatusCode == response.Status
+            && robot.BatteryLevel == response.BatteryLevel
+            && robot.MapCode == response.MapCode
+            && robot.NodeCode == response.NodeCode
+            && robot.MissionCode == response.MissionCode)
+        {
+            return;
+        }
+
+        robot.History.Add(new RobotStatusHistory
+        {
+            RobotId = robot.RobotId,
+            RobotType = robot.RobotType,
+            StatusCode = robot.StatusCode,
+            StatusName = robot.StatusName,
+            Availability = robot.Availability,
+            BatteryLevel = robot.BatteryLevel,
+            MapCode = robot.MapCode,
+            NodeCode = robot.NodeCode,
+            MissionCode = robot.MissionCode,
+            ValidFrom = robot.UpdatedAt,
+            ValidTo = now
+        });
+        robot.RobotType = response.RobotType;
+        robot.StatusCode = response.Status;
+        robot.StatusName = StatusMapping.RobotName(response.Status);
+        robot.Availability = StatusMapping.RobotAvailability(response.Status);
+        robot.BatteryLevel = response.BatteryLevel;
+        robot.MapCode = response.MapCode;
+        robot.NodeCode = response.NodeCode;
+        robot.MissionCode = response.MissionCode;
+        robot.UpdatedAt = now;
+    }
+
+    private static Robot CreateRobot(KukaRobotResponse response, DateTime now) => new()
+    {
+        RobotId = response.RobotId,
+        RobotType = response.RobotType,
+        StatusCode = response.Status,
+        StatusName = StatusMapping.RobotName(response.Status),
+        Availability = StatusMapping.RobotAvailability(response.Status),
+        BatteryLevel = response.BatteryLevel,
+        MapCode = response.MapCode,
+        NodeCode = response.NodeCode,
+        MissionCode = response.MissionCode,
+        UpdatedAt = now
     };
 }

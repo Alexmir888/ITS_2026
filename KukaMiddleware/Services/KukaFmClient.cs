@@ -27,8 +27,18 @@ public sealed class KukaFmClient(
     public async Task<IReadOnlyList<KukaJobResponse>> QueryJobsAsync(CancellationToken cancellationToken)
     {
         var result = await SendAsync<IReadOnlyList<KukaJobResponse>>(
-            HttpMethod.Post, _options.JobsPath, new { limit = _options.JobsLimit }, cancellationToken);
+            HttpMethod.Post, _options.JobsPath, new { }, cancellationToken);
         return result.Data ?? [];
+    }
+
+    public async Task<KukaJobResponse?> QueryJobAsync(
+        string missionCode,
+        CancellationToken cancellationToken)
+    {
+        var result = await SendAsync<IReadOnlyList<KukaJobResponse>>(
+            HttpMethod.Post, _options.JobsPath, new { jobCode = missionCode }, cancellationToken);
+        return result.Data?.FirstOrDefault(job =>
+            string.Equals(job.MissionCode, missionCode, StringComparison.Ordinal));
     }
 
     public async Task<IReadOnlyList<KukaRobotResponse>> QueryRobotsAsync(CancellationToken cancellationToken)
@@ -62,16 +72,26 @@ public sealed class KukaFmClient(
             logger.LogWarning("KUKA FM request {Method} {Path} failed with {StatusCode}",
                 method, path, (int)response.StatusCode);
         }
+        else
+        {
+            logger.LogInformation("KUKA FM request {Method} {Path} returned {StatusCode}",
+                method, path, (int)response.StatusCode);
+        }
 
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<KukaApiResponse<T>>(cancellationToken);
-        var isSuccessful = result is not null && result.Success &&
-            (string.IsNullOrWhiteSpace(result.Code) || string.Equals(result.Code, "0", StringComparison.Ordinal));
-
-        if (!isSuccessful)
+        if (result is null)
         {
             throw new HttpRequestException(
-                $"KUKA FM returned an unsuccessful response (code: {result?.Code ?? "missing"}, message: {result?.Message ?? "none"}).");
+                "KUKA FM returned an empty response.");
+        }
+
+        if (!result.Success
+            || (!string.IsNullOrWhiteSpace(result.Code)
+                && !string.Equals(result.Code, "0", StringComparison.Ordinal)))
+        {
+            throw new HttpRequestException(
+                $"KUKA FM returned an unsuccessful response (code: {result.Code ?? "missing"}, message: {result.Message ?? "none"}).");
         }
 
         return result;
