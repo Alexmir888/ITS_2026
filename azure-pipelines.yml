@@ -3,50 +3,130 @@ trigger:
     include:
       - main
 
-pool:
-  vmImage: ubuntu-latest
+stages:
+  - stage: Validate
+    displayName: Build and test
+    jobs:
+      - job: BuildAndTest
+        pool:
+          vmImage: ubuntu-latest
+        steps:
+          - checkout: self
 
-steps:
-  - checkout: self
+          - task: UseDotNet@2
+            displayName: Install .NET 8 SDK
+            inputs:
+              packageType: sdk
+              version: 8.0.x
 
-  - task: UseDotNet@2
-    displayName: Install .NET 8 SDK
-    inputs:
-      packageType: sdk
-      version: 8.0.x
+          - script: dotnet restore KukaMiddleware.Tests/KukaMiddleware.Tests.csproj
+            displayName: Restore dependencies
 
-  - script: dotnet restore KukaMiddleware.Tests/KukaMiddleware.Tests.csproj
-    displayName: Restore dependencies
+          - script: |
+              set -euo pipefail
+              for project in KukaMiddleware/KukaMiddleware.csproj KukaMiddleware.Tests/KukaMiddleware.Tests.csproj; do
+                result="$(dotnet list "$project" package --vulnerable --include-transitive 2>&1)"
+                printf '%s\n' "$result"
+                if printf '%s\n' "$result" | grep -Eiq '(^|[[:space:]])(High|Critical)([[:space:]]|$)'; then
+                  echo "High or critical NuGet vulnerabilities were found."
+                  exit 1
+                fi
+              done
+            displayName: Fail on high or critical NuGet vulnerabilities
 
-  - script: |
-      set -euo pipefail
-      for project in KukaMiddleware/KukaMiddleware.csproj KukaMiddleware.Tests/KukaMiddleware.Tests.csproj; do
-        result="$(dotnet list "$project" package --vulnerable --include-transitive 2>&1)"
-        printf '%s\n' "$result"
-        if printf '%s\n' "$result" | grep -Eiq '(^|[[:space:]])(High|Critical)([[:space:]]|$)'; then
-          echo "High or critical NuGet vulnerabilities were found."
-          exit 1
-        fi
-      done
-    displayName: Fail on high or critical NuGet vulnerabilities
+          - script: dotnet format KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --verify-no-changes --no-restore
+            displayName: Verify C# formatting and analyzers
 
-  - script: dotnet format KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --verify-no-changes --no-restore
-    displayName: Verify C# formatting and analyzers
+          - script: dotnet build KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --configuration Release --no-restore --warnaserror
+            displayName: Build with warnings as errors
 
-  - script: dotnet build KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --configuration Release --no-restore --warnaserror
-    displayName: Build with warnings as errors
+          - script: dotnet test KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=middleware-tests.trx" --results-directory "$(Agent.TempDirectory)/test-results"
+            displayName: Run unit and API tests
 
-  - script: dotnet test KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=middleware-tests.trx" --results-directory "$(Agent.TempDirectory)/test-results"
-    displayName: Run unit and API tests
+          - task: PublishTestResults@2
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: '$(Agent.TempDirectory)/test-results/*.trx'
+              failTaskOnFailedTests: true
+              testRunTitle: KUKA Middleware tests
 
-  - task: PublishTestResults@2
-    displayName: Publish test results
-    condition: succeededOrFailed()
-    inputs:
-      testResultsFormat: VSTest
-      testResultsFiles: '$(Agent.TempDirectory)/test-results/*.trx'
-      failTaskOnFailedTests: true
-      testRunTitle: KUKA Middleware tests
+          - script: docker build --tag kuka-middleware:$(Build.SourceVersion) .
+            displayName: Build production container
 
-  - script: docker build --tag kuka-middleware:$(Build.SourceVersion) .
-    displayName: Build production container
+  - stage: Deploy
+    displayName: Automatically deploy after validation
+    dependsOn: Validate
+    condition: succeeded()
+    variables:
+      - group: kuka-middleware-deploy
+    jobs:
+      - job: ComposeDeploy
+        displayName: Deploy and smoke-test
+        pool:
+          name: $(DOCKER_AGENT_POOL)
+        steps:
+          - checkout: self
+
+          - task: PowerShell@2
+            displayName: Deploy with Docker Compose and smoke-test
+            inputs:
+              targetType: inline
+              script: |
+                $required = @(
+                  'POSTGRES_USER',
+                  'POSTGRES_PASSWORD',
+                  'POSTGRES_DB',
+                  'POSTGRES_PORT',
+                  'MIDDLEWARE_API_KEY',
+                  'KUKA_FM_BASE_URL',
+                  'KUKA_FM_ORG_ID',
+                  'KUKA_FM_TOKEN',
+                  'KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE',
+                  'KUKA_FM_POLL_INTERVAL_SECONDS',
+                  'SEQ_ADMIN_PASSWORD'
+                )
+                foreach ($name in $required) {
+                  if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+                    throw "Required deployment variable '$name' is not configured."
+                  }
+                }
+
+                docker compose -f docker-compose.yml up -d --build
+                if ($LASTEXITCODE -ne 0) {
+                  throw 'Docker Compose deployment failed.'
+                }
+
+                $ready = $false
+                for ($attempt = 1; $attempt -le 18; $attempt++) {
+                  try {
+                    $ui = Invoke-WebRequest -Uri 'http://localhost:8080/' -TimeoutSec 5
+                    $health = Invoke-WebRequest -Uri 'http://localhost:8080/api/health' -TimeoutSec 5
+                    if ($ui.StatusCode -eq 200 -and $health.StatusCode -eq 200) {
+                      $ready = $true
+                      break
+                    }
+                  }
+                  catch {
+                    Start-Sleep -Seconds 5
+                  }
+                }
+
+                if (-not $ready) {
+                  throw 'Post-deployment smoke check failed for the UI or API health endpoint.'
+                }
+                Write-Host 'Deployment and smoke checks completed successfully.'
+            env:
+              POSTGRES_USER: $(POSTGRES_USER)
+              POSTGRES_PASSWORD: $(POSTGRES_PASSWORD)
+              POSTGRES_DB: $(POSTGRES_DB)
+              POSTGRES_PORT: $(POSTGRES_PORT)
+              MIDDLEWARE_API_KEY: $(MIDDLEWARE_API_KEY)
+              KUKA_FM_BASE_URL: $(KUKA_FM_BASE_URL)
+              KUKA_FM_ORG_ID: $(KUKA_FM_ORG_ID)
+              KUKA_FM_TOKEN: $(KUKA_FM_TOKEN)
+              KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE: $(KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE)
+              KUKA_FM_POLL_INTERVAL_SECONDS: $(KUKA_FM_POLL_INTERVAL_SECONDS)
+              SEQ_FIRSTRUN_NOAUTHENTICATION: 'false'
+              SEQ_ADMIN_PASSWORD: $(SEQ_ADMIN_PASSWORD)

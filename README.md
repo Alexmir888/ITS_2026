@@ -68,15 +68,15 @@ dotnet format KukaMiddleware.Tests/KukaMiddleware.Tests.csproj --verify-no-chang
 
 ## Azure DevOps CI/CD
 
-- [azure-pipelines.yml](azure-pipelines.yml) spúšťa CI pri zmenách do `main`: restore, kontrolu zraniteľných NuGet balíkov, formátovanie/analyzéry, build, testy a Docker build.
-- [ci-cd/cd.yml](ci-cd/cd.yml) je manuálny CD pipeline pre Docker Compose na self-hosted Azure agentovi s Docker Desktop (Linux containers).
-- Pred použitím CD vytvor v Azure DevOps Library variable group `kuka-middleware-deploy`, povoľ jej použitie v pipeline a nastav:
+- [azure-pipelines.yml](azure-pipelines.yml) spúšťa pri zmenách do `main` overenie zraniteľností, formátovania, build a testy. Po úspešnom validačnom stage automaticky nasadí cez Docker Compose a vykoná smoke test UI a health endpointu.
+- [ci-cd/cd.yml](ci-cd/cd.yml) je samostatný manuálny CD pipeline na opätovné nasadenie mimo bežného CI/CD toku.
+- Pred použitím automatického CD vytvor v Azure DevOps Library variable group `kuka-middleware-deploy`, povoľ jej použitie v pipeline a nastav:
   - `DOCKER_AGENT_POOL` – pool s agentom, ktorý hostuje cieľový Docker Desktop.
   - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `POSTGRES_PORT`.
   - `MIDDLEWARE_API_KEY`, `KUKA_FM_BASE_URL`, `KUKA_FM_ORG_ID`, `KUKA_FM_TOKEN`, `KUKA_FM_ALLOW_UNTRUSTED_CERTIFICATE`, `KUKA_FM_POLL_INTERVAL_SECONDS`.
   - `SEQ_ADMIN_PASSWORD`.
 
-Citlivé hodnoty musia byť označené ako secret variables. Pipeline ich posiela procesu ako environment variables; nevkladá ich do repozitára ani do argumentov príkazového riadka. Voliteľný `SEQ_API_KEY` sa môže nastaviť v lokálnom `.env`. CD po nasadení overí UI a `/api/health`.
+Požiadavka na automatizovaný redeploy je splnená konfiguráciou pipeline; samotné spustenie vyžaduje vytvorené Azure pipeline definície, autorizovanú variable group a online self-hosted Docker agent. Citlivé hodnoty musia byť označené ako secret variables. Pipeline ich posiela procesu ako environment variables; nevkladá ich do repozitára ani do argumentov príkazového riadka. Voliteľný `SEQ_API_KEY` sa môže nastaviť v lokálnom `.env`. CD po nasadení overí UI a `/api/health`.
 
 ## KUKA FM integrácia
 

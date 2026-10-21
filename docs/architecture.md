@@ -11,7 +11,7 @@ Riešenie je ASP.NET Core 8 Minimal API, EF Core, PostgreSQL a statické HTML/CS
 | ID | Požiadavka | Implementácia |
 | --- | --- | --- |
 | FR1 | Dispatch misie cez middleware do `submitMission`. | `POST /api/missions`; validácia robota, uzlov, kontajnera a priority; payload `RACK_MOVE`. |
-| FR2 | Cancel aktívnej misie cez KUKA FM. | `POST /api/missions/{missionCode}/cancel`; iba statusy 10, 20, 25, 28, 50; režim `FORCE`; KUKA chyba sa vracia ako 502. |
+| FR2 | Cancel aktívnej misie cez KUKA FM. | `POST /api/missions/{missionCode}/cancel`; iba statusy 10, 20, 25, 28, 50; režim `FORCE`; KUKA chyba sa vracia ako 502. KUKA FM štandard API endpoint sa volá `missionCancel` (`/interfaces/api/amr/missionCancel`); pôvodné označenie `cancelMission` v ITS-1 treba čítať ako nepresné pomenovanie tej istej operácie. |
 | FR3 | Polling a persistencia aktívnych misií. | Poller načíta robotov a joby, aktualizuje iba známe aktívne misie a pri chýbajúcom jobe vykoná query podľa job code. |
 | FR4 | Polling a persistencia robotov. | `robotQuery` načítava všetkých robotov; ukladá typ, surový status, dostupnosť, batériu, mapu, uzol, misiu a čas aktualizácie. |
 | FR5 | Uchovanie histórie misií. | Každá zmena statusu uzavrie predchádzajúci interval a vloží nový záznam s `validFrom`/`validTo`. |
@@ -21,7 +21,7 @@ Riešenie je ASP.NET Core 8 Minimal API, EF Core, PostgreSQL a statické HTML/CS
 | NFR2 | Ochrana vlastného API. | `X-Api-Key` pre aplikačné API; iba `/health` a `/api/health` sú verejné. |
 | NFR3 | Token KUKA FM pri každom volaní. | `Authorization` obsahuje nakonfigurovaný raw token bez `Bearer`; token sa neloguje. |
 | NFR4 | Štruktúrované logy. | JSON logy do konzoly a Seq; API operácie, dispatch/cancel aj výsledky KUKA volaní. |
-| NFR5 | Automatizované CI/CD. | Azure CI build/test/Docker build pri zmene `main`; manuálne CD nasadzuje Compose na self-hosted agenta. |
+| NFR5 | Automatizované CI/CD vrátane redeploy. | `azure-pipelines.yml` pri zmene `main` vykoná build/test/Docker build a po úspešnom validačnom stage automaticky nasadí Compose na self-hosted agenta; následne vykoná UI/health smoke test. Azure pipeline, variable group a online Docker agent musia byť nakonfigurované v Azure DevOps. |
 
 ## 3. Use cases
 
@@ -160,7 +160,7 @@ Lokálny štart: skopírovať `.env.example` na `.env`, nastaviť tajné hodnoty
 - [x] Polling aktualizuje roboty a iba známe aktívne misie; pri KUKA chybe neuloží čiastočný výsledok.
 - [x] API key, KUKA token a štruktúrované logovanie bez zápisu tokenu do logov.
 - [x] PostgreSQL/Seq v Docker Compose; EF migrácie a konverzia predchádzajúcej `EnsureCreated` schémy.
-- [x] Azure DevOps CI definovaný; manuálny Docker Compose CD a smoke check definované.
+- [x] Azure DevOps pipeline definovaný: CI a Docker build; automatický Compose redeploy po úspešnom CI; post-deploy smoke check.
 - [x] README a táto špecifikácia aktualizované.
-- [ ] V Azure DevOps treba nakonfigurovať variable group, pool self-hosted agenta a branch policy pre PR validáciu; samotný workspace k Azure DevOps nemá prístupové údaje.
-- [ ] Finálny obsah treba publikovať v Azure DevOps Wiki, ak sa Wiki nepoužíva priamo z Markdown súborov v repozitári.
+- [ ] V Azure DevOps treba vytvoriť pipeline z `azure-pipelines.yml`, nakonfigurovať variable group, pool self-hosted agenta a branch policy pre PR validáciu; workspace nemá prístupové údaje na vykonanie týchto nastavení.
+- [ ] Publikovať aktualizované požiadavky a opraviť odkaz na stránku `Testovanie a CI-CD` v Azure DevOps Wiki; Wiki vyžaduje prihlásenie.
